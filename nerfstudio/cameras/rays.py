@@ -51,6 +51,7 @@ class Frustums(TensorDataclass):
         Returns:
             xyz positions.
         """
+        # self.origins 4096 24 3
         pos = self.origins + self.directions * (self.starts + self.ends) / 2
         if self.offsets is not None:
             pos = pos + self.offsets

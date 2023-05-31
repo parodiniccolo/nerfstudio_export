@@ -28,6 +28,7 @@ import numpy as np
 import open3d as o3d
 import pymeshlab
 import torch
+import h5py
 from rich.console import Console
 from rich.progress import (
     BarColumn,
@@ -72,7 +73,9 @@ def get_mesh_from_pymeshlab_mesh(mesh: pymeshlab.Mesh) -> Mesh:
     )
 
 
-def get_mesh_from_filename(filename: str, target_num_faces: Optional[int] = None) -> Mesh:
+def get_mesh_from_filename(
+    filename: str, target_num_faces: Optional[int] = None
+) -> Mesh:
     """Get a Mesh from a filename."""
     ms = pymeshlab.MeshSet()
     ms.load_new_mesh(filename)
@@ -116,7 +119,7 @@ def generate_point_cloud(
     """
 
     # pylint: disable=too-many-statements
-
+    use_bounding_box = False
     progress = Progress(
         TextColumn(":cloud: Computing Point Cloud :cloud:"),
         BarColumn(),
@@ -126,29 +129,50 @@ def generate_point_cloud(
     points = []
     rgbs = []
     normals = []
+    clips = []
+
     with progress as progress_bar:
         task = progress_bar.add_task("Generating Point Cloud", total=num_points)
         while not progress_bar.finished:
             with torch.no_grad():
                 ray_bundle, _ = pipeline.datamanager.next_train(0)
-                outputs = pipeline.model(ray_bundle)
+                outputs, clip_embeddings = pipeline.model(ray_bundle)
             if rgb_output_name not in outputs:
                 CONSOLE.rule("Error", style="red")
-                CONSOLE.print(f"Could not find {rgb_output_name} in the model outputs", justify="center")
-                CONSOLE.print(f"Please set --rgb_output_name to one of: {outputs.keys()}", justify="center")
+                CONSOLE.print(
+                    f"Could not find {rgb_output_name} in the model outputs",
+                    justify="center",
+                )
+                CONSOLE.print(
+                    f"Please set --rgb_output_name to one of: {outputs.keys()}",
+                    justify="center",
+                )
                 sys.exit(1)
             if depth_output_name not in outputs:
                 CONSOLE.rule("Error", style="red")
-                CONSOLE.print(f"Could not find {depth_output_name} in the model outputs", justify="center")
-                CONSOLE.print(f"Please set --depth_output_name to one of: {outputs.keys()}", justify="center")
+                CONSOLE.print(
+                    f"Could not find {depth_output_name} in the model outputs",
+                    justify="center",
+                )
+                CONSOLE.print(
+                    f"Please set --depth_output_name to one of: {outputs.keys()}",
+                    justify="center",
+                )
                 sys.exit(1)
             rgb = outputs[rgb_output_name]
             depth = outputs[depth_output_name]
+            clip = clip_embeddings
             if normal_output_name is not None:
                 if normal_output_name not in outputs:
                     CONSOLE.rule("Error", style="red")
-                    CONSOLE.print(f"Could not find {normal_output_name} in the model outputs", justify="center")
-                    CONSOLE.print(f"Please set --normal_output_name to one of: {outputs.keys()}", justify="center")
+                    CONSOLE.print(
+                        f"Could not find {normal_output_name} in the model outputs",
+                        justify="center",
+                    )
+                    CONSOLE.print(
+                        f"Please set --normal_output_name to one of: {outputs.keys()}",
+                        justify="center",
+                    )
                     sys.exit(1)
                 normal = outputs[normal_output_name]
                 assert (
@@ -163,7 +187,9 @@ def generate_point_cloud(
                 assert torch.all(
                     comp_l < comp_m
                 ), f"Bounding box min {bounding_box_min} must be smaller than max {bounding_box_max}"
-                mask = torch.all(torch.concat([point > comp_l, point < comp_m], dim=-1), dim=-1)
+                mask = torch.all(
+                    torch.concat([point > comp_l, point < comp_m], dim=-1), dim=-1
+                )
                 point = point[mask]
                 rgb = rgb[mask]
                 if normal_output_name is not None:
@@ -171,11 +197,41 @@ def generate_point_cloud(
 
             points.append(point)
             rgbs.append(rgb)
+            clips.append(clip)
             if normal_output_name is not None:
                 normals.append(normal)
             progress.advance(task, point.shape[0])
+
     points = torch.cat(points, dim=0)
     rgbs = torch.cat(rgbs, dim=0)
+    clips = [torch.unsqueeze(clip, dim=0) for clip in clips]
+    clips = torch.cat(clips, dim=0)
+    # Create an HDF5 file
+    # Change the directory to the location of data.h5
+    CONSOLE.print("Saving H5 file...")
+    hdf5_file = h5py.File(
+        "//workspace/chat-with-nerf/data/home_1/embeddings_v2.h5", "w"
+    )
+    # Create the "points" group
+    points_group = hdf5_file.create_group("points")
+    # Create the "clip" group
+    clip_group = hdf5_file.create_group("clip")
+    # Create the "rgb" group
+    rgb_group = hdf5_file.create_group("rgb")
+
+    points_group.create_dataset("points", data=points.detach().cpu().numpy())
+
+    rgb_group.create_dataset("rgb", data=rgbs.detach().cpu().numpy())
+    for scale in range(30):
+        clip_data = clips[:, :, scale, :].view(-1, 1, 512)
+        clip_data = torch.squeeze(clip_data, dim=1)
+
+        clip_group.create_dataset(
+            f"scale_{scale}", data=clip_data.detach().cpu().numpy()
+        )
+
+    hdf5_file.close()
+    CONSOLE.print("Done saving H5 file...")
 
     pcd = o3d.geometry.PointCloud()
     pcd.points = o3d.utility.Vector3dVector(points.double().cpu().numpy())
@@ -192,7 +248,10 @@ def generate_point_cloud(
     if estimate_normals:
         if normal_output_name is not None:
             CONSOLE.rule("Error", style="red")
-            CONSOLE.print("Cannot estimate normals and use normal_output_name at the same time", justify="center")
+            CONSOLE.print(
+                "Cannot estimate normals and use normal_output_name at the same time",
+                justify="center",
+            )
             sys.exit(1)
         CONSOLE.print("Estimating Point Cloud Normals")
         pcd.estimate_normals()
@@ -246,23 +305,39 @@ def render_trajectory(
                 camera_indices=camera_idx, disable_distortion=disable_distortion
             ).to(pipeline.device)
             with torch.no_grad():
-                outputs = pipeline.model.get_outputs_for_camera_ray_bundle(camera_ray_bundle)
+                outputs = pipeline.model.get_outputs_for_camera_ray_bundle(
+                    camera_ray_bundle
+                )
             if rgb_output_name not in outputs:
                 CONSOLE.rule("Error", style="red")
-                CONSOLE.print(f"Could not find {rgb_output_name} in the model outputs", justify="center")
-                CONSOLE.print(f"Please set --rgb_output_name to one of: {outputs.keys()}", justify="center")
+                CONSOLE.print(
+                    f"Could not find {rgb_output_name} in the model outputs",
+                    justify="center",
+                )
+                CONSOLE.print(
+                    f"Please set --rgb_output_name to one of: {outputs.keys()}",
+                    justify="center",
+                )
                 sys.exit(1)
             if depth_output_name not in outputs:
                 CONSOLE.rule("Error", style="red")
-                CONSOLE.print(f"Could not find {depth_output_name} in the model outputs", justify="center")
-                CONSOLE.print(f"Please set --depth_output_name to one of: {outputs.keys()}", justify="center")
+                CONSOLE.print(
+                    f"Could not find {depth_output_name} in the model outputs",
+                    justify="center",
+                )
+                CONSOLE.print(
+                    f"Please set --depth_output_name to one of: {outputs.keys()}",
+                    justify="center",
+                )
                 sys.exit(1)
             images.append(outputs[rgb_output_name].cpu().numpy())
             depths.append(outputs[depth_output_name].cpu().numpy())
     return images, depths
 
 
-def collect_camera_poses_for_dataset(dataset: Optional[InputDataset]) -> List[Dict[str, Any]]:
+def collect_camera_poses_for_dataset(
+    dataset: Optional[InputDataset],
+) -> List[Dict[str, Any]]:
     """Collects rescaled, translated and optimised camera poses for a dataset.
 
     Args:
@@ -294,7 +369,9 @@ def collect_camera_poses_for_dataset(dataset: Optional[InputDataset]) -> List[Di
     return frames
 
 
-def collect_camera_poses(pipeline: VanillaPipeline) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+def collect_camera_poses(
+    pipeline: VanillaPipeline,
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """Collects camera poses for train and eval datasets.
 
     Args:
