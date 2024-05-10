@@ -126,7 +126,10 @@ def generate_point_cloud(
         TaskProgressColumn(show_speed=True),
         TimeRemainingColumn(elapsed_when_finished=True, compact=True),
     )
-    points = []
+
+    origins = [] #added
+    directions = [] #added
+    points = [] 
     rgbs = []
     normals = []
     clips = []
@@ -179,7 +182,10 @@ def generate_point_cloud(
                     torch.min(normal) >= 0.0 and torch.max(normal) <= 1.0
                 ), "Normal values from method output must be in [0, 1]"
                 normal = (normal * 2.0) - 1.0
-            point = ray_bundle.origins + ray_bundle.directions * depth
+            
+            origin = ray_bundle.origins #added 
+            direction = ray_bundle.directions #added
+            point = origin + direction * depth
 
             if use_bounding_box:
                 comp_l = torch.tensor(bounding_box_min, device=point.device)
@@ -196,6 +202,8 @@ def generate_point_cloud(
                     normal = normal[mask]
 
             points.append(point)
+            origins.append(origin)
+            directions.append(direction)
             rgbs.append(rgb)
             clips.append(clip)
             if normal_output_name is not None:
@@ -203,6 +211,8 @@ def generate_point_cloud(
             progress.advance(task, point.shape[0])
 
     points = torch.cat(points, dim=0)
+    origins = torch.cat(origins, dim=0)
+    directions = torch.cat(directions, dim=0)
     rgbs = torch.cat(rgbs, dim=0)
     clips = [torch.unsqueeze(clip, dim=0) for clip in clips]
     clips = torch.cat(clips, dim=0)
@@ -210,16 +220,23 @@ def generate_point_cloud(
     # Change the directory to the location of data.h5
     CONSOLE.print("Saving H5 file...")
     hdf5_file = h5py.File(
-        "//workspace/chat-with-nerf/data/home_1/embeddings_v2.h5", "w"
+        "/media/dc-04-vol03/Niccolo/chatwithlerf/chat-with-nerf-test/chat-with-nerf/outputs/embeddings/embeddings_v2.h5", "w"
     )
     # Create the "points" group
     points_group = hdf5_file.create_group("points")
+    # Create the "origins" group
+    origins_group = hdf5_file.create_group("origins")
+    # Create the "directions" group
+    directions_group = hdf5_file.create_group("directions")
     # Create the "clip" group
     clip_group = hdf5_file.create_group("clip")
     # Create the "rgb" group
     rgb_group = hdf5_file.create_group("rgb")
 
     points_group.create_dataset("points", data=points.detach().cpu().numpy())
+    origins_group.create_dataset("origins", data=origins.detach().cpu().numpy())
+    directions_group.create_dataset("directions", data=directions.detach().cpu().numpy())
+
 
     rgb_group.create_dataset("rgb", data=rgbs.detach().cpu().numpy())
     for scale in range(30):
