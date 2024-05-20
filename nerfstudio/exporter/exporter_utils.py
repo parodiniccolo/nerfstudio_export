@@ -220,7 +220,7 @@ def generate_point_cloud(
     # Change the directory to the location of data.h5
     CONSOLE.print("Saving H5 file...")
     hdf5_file = h5py.File(
-        "/media/dc-04-vol03/Niccolo/chatwithlerf/chat-with-nerf-test/chat-with-nerf/outputs/embeddings/embeddings_v2.h5", "w"
+        "embeddings_v2.h5", "w"
     )
     # Create the "points" group
     points_group = hdf5_file.create_group("points")
