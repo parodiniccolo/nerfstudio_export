@@ -94,6 +94,7 @@ class ExportPointCloud(Exporter):
             bounding_box_min=self.bounding_box_min,
             bounding_box_max=self.bounding_box_max,
             std_ratio=self.std_ratio,
+            output_dir=self.output_dir,
         )
         torch.cuda.empty_cache()
 

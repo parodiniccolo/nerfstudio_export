@@ -98,6 +98,7 @@ def generate_point_cloud(
     bounding_box_min: Tuple[float, float, float] = (-1.0, -1.0, -1.0),
     bounding_box_max: Tuple[float, float, float] = (1.0, 1.0, 1.0),
     std_ratio: float = 10.0,
+    output_dir="out",
 ) -> o3d.geometry.PointCloud:
     """Generate a point cloud from a nerf.
 
@@ -219,9 +220,7 @@ def generate_point_cloud(
     # Create an HDF5 file
     # Change the directory to the location of data.h5
     CONSOLE.print("Saving H5 file...")
-    hdf5_file = h5py.File(
-        "embeddings_v2.h5", "w"
-    )
+    hdf5_file = h5py.File(f"{output_dir}/embeddings_v2.h5", "w")
     # Create the "points" group
     points_group = hdf5_file.create_group("points")
     # Create the "origins" group

@@ -1,4 +1,4 @@
-# Copyright 2022 The Nerfstudio Team. All rights reserved.
+# Copyright 2022 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -16,20 +16,15 @@
 import math
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Type
+from typing import Literal, Type
 
 import cv2
 import numpy as np
 import torch
-from typing_extensions import Literal
 
 from nerfstudio.cameras import camera_utils
 from nerfstudio.cameras.cameras import Cameras, CameraType
-from nerfstudio.data.dataparsers.base_dataparser import (
-    DataParser,
-    DataParserConfig,
-    DataparserOutputs,
-)
+from nerfstudio.data.dataparsers.base_dataparser import DataParser, DataParserConfig, DataparserOutputs
 from nerfstudio.data.scene_box import SceneBox
 
 
@@ -51,7 +46,7 @@ def traj_string_to_matrix(traj_string: str):
     ts = tokens[0]
     # Rotation in angle axis
     angle_axis = [float(tokens[1]), float(tokens[2]), float(tokens[3])]
-    r_w_to_p, _ = cv2.Rodrigues(np.asarray(angle_axis))
+    r_w_to_p, _ = cv2.Rodrigues(np.asarray(angle_axis))  # type: ignore
     # Translation
     t_w_to_p = np.asarray([float(tokens[4]), float(tokens[5]), float(tokens[6])])
     extrinsics = np.eye(4, 4)
@@ -65,12 +60,12 @@ def traj_string_to_matrix(traj_string: str):
 class ARKitScenesDataParserConfig(DataParserConfig):
     """ARKitScenes dataset config.
     ARKitScenes dataset (http://github.com/apple/ARKitScenes) is a large-scale 3D dataset of indoor scenes.
-    This dataparser uses 3D deteciton subset of the ARKitScenes dataset.
+    This dataparser uses 3D detection subset of the ARKitScenes dataset.
     """
 
     _target: Type = field(default_factory=lambda: ARKitScenes)
     """target class to instantiate"""
-    data: Path = Path("data/ARKitScenes/3dod/Validation/41069021")
+    data: Path = Path("/media/dc-04-vol03/Niccolo/openlerf3d/data/arkit/42446588/42446588/") # this??
     """Path to ARKitScenes folder with densely extracted scenes."""
     scale_factor: float = 1.0
     """How much to scale the camera origins by."""
@@ -100,9 +95,11 @@ class ARKitScenes(DataParser):
         intrinsics_dir = self.config.data / f"{video_id}_frames" / "lowres_wide_intrinsics"
         pose_file = self.config.data / f"{video_id}_frames" / "lowres_wide.traj"
 
+
         frame_ids = [x.name for x in sorted(depth_dir.iterdir())]
         frame_ids = [x.split(".png")[0].split("_")[1] for x in frame_ids]
         frame_ids.sort()
+
 
         poses_from_traj = {}
         with open(pose_file, "r", encoding="utf-8") as f:
@@ -214,13 +211,20 @@ class ARKitScenes(DataParser):
 
     @staticmethod
     def _get_pose(frame_id: str, poses_from_traj: dict):
+        
+
+        
+        frame_pose = None
         if str(frame_id) in poses_from_traj:
             frame_pose = np.array(poses_from_traj[str(frame_id)])
         else:
             for my_key in poses_from_traj:
-                if abs(float(frame_id) - float(my_key)) < 0.005:
+                #print("frame_id: ", frame_id)
+                #print("my key: ", my_key)
+                if abs(float(frame_id) - float(my_key)) < 0.005: 
                     frame_pose = np.array(poses_from_traj[str(my_key)])
 
+        assert frame_pose is not None
         frame_pose[0:3, 1:3] *= -1
         frame_pose = frame_pose[np.array([1, 0, 2, 3]), :]
         frame_pose[2, :] *= -1
